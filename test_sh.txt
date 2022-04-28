@@ -1,0 +1,227 @@
+Execute sudo without Password?
+========================================
+NOT:
+--sudo visudo (add below line)
+mm ALL=(ALL) NOPASSWD: ALL
+========================================
+
+
+#!/bin/bash
+
+LC_ALL=C
+SSH_PORT=22
+SSH_OPTS="-o ConnectTimeout=5 -o PasswordAuthentication=No"
+
+export LC_ALL SSH_PORT SSH_OPTS
+
+ping_test()      { ping -w 3 -i 0.2 -c3 "$1" &>/dev/null ; }
+port_test()      { nmap -p $SSH_PORT -P0 "$1" | grep -qE "$SSH_PORT/tcp.*open" ; }
+sshd_test()      { ssh -o Port=$SSH_PORT $SSH_OPTS -v "$1" date 2>&1 | grep -qE "Remote protocol version [0-9]+" ; }
+ssh_login_test() { ssh -o Port=$SSH_PORT $SSH_OPTS "$1" echo ssh connect success 2>&1 | grep -qE "ssh connect success" ; }
+
+check_ssh() {
+  
+   local target="$1"
+   ping_test       "$target"    || return 1
+   port_test       "$target"    || return 2
+   sshd_test       "$target"    || return 3
+   ssh_login_test  "$target"    || return 4   # this can be done as the same step with the step before
+   return 0
+
+}
+
+# -- start of main program  
+
+if check_ssh 192.168.1.40; then
+  echo "BASARILI"
+fi
+
+=============================================
+status=$(ssh -o ConnectTimeout=3 mm\1@192.168.1.40 echo ok 2>&1)
+echo $status
+
+
+status=$(sshpass -p "1" scp -o ConnectTimeout=3 /home/mm/deploy_files/abc.txt mm@192.168.1.40:/home/mm/deploy_files/  echo ok 2>&1)
+echo $status
+if [[ $status == ok ]] ; then
+  echo "auth ok, do something"
+else
+  echo noauth
+fi
+
+
+sshpass -p "1" -o ConnectTimeout=3 scp /home/mm/deploy_files/abc.txt mm@192.168.1.40:/home/mm/deploy_files/ echo ok 2>&1
+
+=======================================
+--test.sh
+
+#!/bin/bash
+
+# -- ip/host and res which is result of nmap (note must have nmap installed)
+# -- if result contains open, we can reach ssh else assume failure) --
+
+FILE=/home/mm/deploy_files/abc.txt
+if [ -f "$FILE" ]; then
+    while read SERVER USERNAME PASSWORD
+    do
+           echo $SERVER
+	   res=$(nmap ${SERVER} -PN -p ssh | grep open)
+           if [[ "${res}" =~ "open" ]] ;then
+	     echo 'starting transfer'
+             sshpass -p "$PASSWORD" ssh "$USERNAME"@"$SERVER" << EOF 
+scp /home/mm/deploy_files/abc.txt "$USERNAME"@"$SERVER":/home/mm/deploy_files/
+        	if [ $? = 0 ]; then
+	   	  echo "scp ${SERVER} transfer successful"
+		fi
+	   else
+             echo "The host ${SERVER} is not accessible!"
+           fi
+    done <./server.txt
+else 
+   echo "$FILE does not exist."
+fi
+=================================================
+#!/bin/bash
+
+FTP_SERVER=192.168.1.36
+FILE=/home/mm/deploy_files/abc.txt
+SCP_ERROR_FILE="/home/mm/scp-error-log.txt"
+dt=`date +"%Y%m%d_%H%M%S"`
+
+if [ ! -f "$FILE" ]; then
+  echo "File $FILE does not exist!"
+  exit 1
+fi
+
+while read SERVER
+do
+echo "File $FILE copy to ${SERVER} startting transfer..."
+scp "$FILE" "$SERVER":/home/mm/deploy_files/ 2>"$SCP_ERROR_FILE"
+  if [ $? = 0 ]; then
+     echo "File $FILE copy to ${SERVER} sync direcory transfer is SUCCESSED..."
+  else
+     echo "File $FILE copy to ${SERVER} sync direcory transfer is FAILED !!!"
+  fi
+     echo "[SSH Connecting $SERVER ...]"
+ssh -T "$SERVER" << EOF
+   if [ -f /home/mm/sync/abc.txt ]; then
+     mv /home/mm/sync/abc.txt /home/mm/sync/abc_orig.txt_"$dt"
+   fi
+   cp /home/mm/deploy_files/abc.txt /home/mm/sync/
+   rm /home/mm/deploy_files/abc.txt
+   echo "File transformation OK ..."
+   echo "systemctl restart sync-service"
+   if (systemctl -q is-active sshd)
+    then
+     echo "kargomatik-sync.service is running."
+   else
+     echo "kargomatik-sync.service is NOT running."
+   fi
+EOF
+done <./servers.txt
+
+===================
+./test_file.sh &> log2.txt
+
+
+=========================================
+File Compare (MD5 Hash Value)
+=========================================
+md5deep -r /home/mm/Downloads/ > hash_file_list
+sha256sum Downloads/* | sort
+
+=====================
+Compare Script: https://askubuntu.com/questions/515900/how-to-compare-two-files
+====================
+#!/bin/bash
+
+cmp -s "$1" "$2"
+case "$?" in
+    0)
+        echo "" > Output_File
+        echo "files are identical"
+        ;;
+    1)
+        echo "" > Output_File
+        cp "$1" ~/.colcmp.array1.tmp.sh
+#        sed -i -E "s/([^A-Za-z0-9 ])/\\\\\\1/g" ~/.colcmp.array1.tmp.sh
+        sed -i -E "s/^(.*)$/#\\1/" ~/.colcmp.array1.tmp.sh
+        sed -i -E "s/^#\\s*(\\S+)\\s+(\\S.*?)\\s*\$/A1\\[\\1\\]=\"\\2\"/" ~/.colcmp.array1.tmp.sh
+        chmod 755 ~/.colcmp.array1.tmp.sh
+        declare -A A1
+        source ~/.colcmp.array1.tmp.sh
+
+        cp "$2" ~/.colcmp.array2.tmp.sh
+#        sed -i -E "s/([^A-Za-z0-9 ])/\\\\\\1/g" ~/.colcmp.array2.tmp.sh
+        sed -i -E "s/^(.*)$/#\\1/" ~/.colcmp.array2.tmp.sh
+        sed -i -E "s/^#\\s*(\\S+)\\s+(\\S.*?)\\s*\$/A2\\[\\1\\]=\"\\2\"/" ~/.colcmp.array2.tmp.sh
+        chmod 755 ~/.colcmp.array2.tmp.sh
+        declare -A A2
+        source ~/.colcmp.array2.tmp.sh
+
+        USERSWHODIDNOTCHANGE=
+        for i in "${!A1[@]}"; do
+            if [ "${A2[$i]+x}" = "" ]; then
+                echo "$i was removed"
+                echo "$i has changed" > Output_File
+            fi
+        done
+        for i in "${!A2[@]}"; do
+            if [ "${A1[$i]+x}" = "" ]; then
+                echo "$i was added as '${A2[$i]}'"
+                echo "$i has changed '${A2[$i]}'" > Output_File
+            elif [ "${A1[$i]}" != "${A2[$i]}" ]; then
+                echo "$i changed from '${A1[$i]}' to '${A2[$i]}'"
+                echo "$i has changed '${A2[$i]}'" > Output_File
+            else
+                if [ x$USERSWHODIDNOTCHANGE != x ]; then
+                    USERSWHODIDNOTCHANGE=",$USERSWHODIDNOTCHANGE"
+                fi
+                USERSWHODIDNOTCHANGE="$i$USERSWHODIDNOTCHANGE"
+            fi
+        done
+#        if [ x$USERSWHODIDNOTCHANGE != x ]; then
+#            echo "no change: $USERSWHODIDNOTCHANGE"
+#        fi
+        ;;
+    *)
+        echo "error: file not found, access denied, etc..."
+        echo "usage: ./colcmp.sh File_1.txt File_2.txt"
+        ;;
+esac
+
+==========================
+./colcmp.sh md5_down_all.txt md5_down_all_2.txt
+
+cat Output_File
+
+=======================================================================
+=======================================================================
+
+CREATE TABLE public.temp01
+(
+    cargomatic_id character varying(255) COLLATE pg_catalog."default",  
+    order_number character varying(255) COLLATE pg_catalog."default" NOT NULL,  
+    delivery_code character varying(255) COLLATE pg_catalog."default" NOT NULL,
+    cancel_reason character varying(255) COLLATE pg_catalog."default",
+    cancel_date timestamp without time zone
+);
+
+select 'insert into temp01 values('''||poi_id||''','''||order_number||''','''||delivery_code||''','''||cancel_reason||''','''||cancel_date||''');'
+from delivery 
+where cancel_date is not null or cancel_reason is not null;
+
+
+update public.commitment 
+   set cancel_date = d.cancel_date,
+       cancel_reason = d.cancel_reason 
+  from (select cargomatic_id, order_number, delivery_code, cancel_reason, cancel_date 
+		from public.temp_delivery
+	   ) d
+         where d.cargomatic_id = commitment.cargomatic_id 
+		  and d.order_number = commitment.order_number 
+          and d.delivery_code = commitment.delivery_code;
+
+
+
+
